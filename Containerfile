@@ -138,6 +138,11 @@ RUN --mount=type=cache,dst=/var/cache/rpm-ostree \
     --from repo=updates \
         pciutils-libs \
         || true && \
+    rpm-ostree override replace \
+    --experimental \
+    --from repo=updates \
+        libdrm \
+        || true && \
     rpm-ostree override remove \
         glibc32 \
         || true && \
@@ -437,6 +442,7 @@ RUN --mount=type=cache,dst=/var/cache/rpm-ostree \
     sed -i '0,/enabled=0/s//enabled=1/' /etc/yum.repos.d/fedora-updates.repo && \
     rpm-ostree install \
         lutris \
+        umu-launcher \
         wine-core.x86_64 \
         wine-core.i686 \
         wine-pulseaudio.x86_64 \
@@ -685,7 +691,6 @@ ARG KERNEL_FLAVOR="${KERNEL_FLAVOR:-fsync}"
 ARG IMAGE_BRANCH="${IMAGE_BRANCH:-main}"
 ARG BASE_IMAGE_NAME="${BASE_IMAGE_NAME:-kinoite}"
 ARG FEDORA_MAJOR_VERSION="${FEDORA_MAJOR_VERSION:-40}"
-ARG STEAM_PACKAGE_VERSION="${STEAM_PACKAGE_VERSION:-steam-jupiter-stable-1.0.0.79-1-x86_64}"
 
 COPY system_files/deck/shared system_files/deck/${BASE_IMAGE_NAME} /
 
@@ -768,12 +773,10 @@ RUN --mount=type=cache,dst=/var/cache/rpm-ostree \
     ostree container commit
 
 # Install Gamescope Session & Supporting changes
-# Add bootstraplinux_ubuntu12_32.tar.xz used by gamescope-session (Thanks ChimeraOS! - https://chimeraos.org/)
+# Add bootstrap_steam.tar.gz used by gamescope-session (Thanks GE & Nobara Project!)
 RUN --mount=type=cache,dst=/var/cache/rpm-ostree \
-    curl -Lo /tmp/steam-jupiter.pkg.tar.zst https://steamdeck-packages.steamos.cloud/archlinux-mirror/jupiter-main/os/x86_64/"${STEAM_PACKAGE_VERSION}".pkg.tar.zst && \
-    mkdir -p /usr/etc/first-boot && \
-    tar --no-same-owner --no-same-permissions --no-overwrite-dir -I zstd -xvf /tmp/steam-jupiter.pkg.tar.zst usr/lib/steam/bootstraplinux_ubuntu12_32.tar.xz -o > /usr/etc/first-boot/bootstraplinux_ubuntu12_32.tar.xz && \
-    rm -f /tmp/steam-jupiter.pkg.tar.zst && \
+    mkdir -p /usr/share/gamescope-session-plus/ && \
+    curl -Lo /usr/share/gamescope-session-plus/bootstrap_steam.tar.gz https://large-package-sources.nobaraproject.org/bootstrap_steam.tar.gz && \
     rpm-ostree install \
         gamescope-session-plus \
         gamescope-session-steam && \
