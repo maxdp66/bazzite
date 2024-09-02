@@ -85,7 +85,6 @@ How does this script work:
 
 
 from argparse import ArgumentParser
-from copy import copy
 from datetime import datetime, UTC
 import fcntl
 import html
@@ -102,7 +101,7 @@ import requests
 
 _is_debug: bool = False
 
-_BASE_URL = os.getenv("BASE_URL", "https://universal-blue.discourse.group").rstrip("/")
+_BASE_URL = "https://universal-blue.discourse.group"
 
 
 class UrlBatch(NamedTuple):
@@ -146,30 +145,10 @@ class DiscourseProcessor:
         imgs_urls = re.compile(
             r"<img\ssrc=\"(?P<image_cdn_url>https://(?:[a-zA-Z0-9./_-]+)).*data-base62-sha1=\"(?P<sha1>[a-zA-Z0-9]+)\".*\">"
         )
-        hashed_images_urls = re.compile(r"upload://[a-zA-Z0-9]{27}\.(?:jpe?g|png|svg)")
-
-    @staticmethod
-    def is_valid_doc_topic_url(url: str) -> bool:
-        """Check if the passed discourse topic url is valid doc
-
-        Args:
-            url (str)
-
-        Returns:
-            bool
-        """
-
-        return (
-            # re.match(r"https\:\/\/universal-blue\.discourse\.group/docs\?topic=\d+", url)
-            re.match(
-                re.escape(_BASE_URL) + r"/docs\?topic=\d+",
-                url,
-            )
-            is not None
-        )
+        hashed_images_urls = re.compile(r"upload://([a-zA-Z0-9]+)", flags=re.I | re.M)
 
     @classmethod
-    def transform_to_url_batch(cls, url: str) -> UrlBatch | None:
+    def transform_to_url_batch(cls, url: str) -> UrlBatch:
         """Input a discourse url topic and return a batch of urls such as `/raw/{id}` and `/t/{id}.json`
 
         Args:
@@ -177,11 +156,8 @@ class DiscourseProcessor:
         """
         res = None
 
-        if not cls.is_valid_doc_topic_url(url):
-            raise TypeError("Url is not valid")
-
         # Get topic id
-        id = re.search(re.escape(_BASE_URL) + r"/docs\?topic=(\d+)", url)
+        id = re.search(rf"{re.escape(_BASE_URL)}/docs\?topic=(\d+)", url)
         if id is None:
             raise Exception("id was not found")
         id = int(id.group(1))
@@ -193,23 +169,6 @@ class DiscourseProcessor:
         )
 
         return res
-
-    @classmethod
-    def get_page_from_json(cls, batch: UrlBatch) -> HTMLPage:
-        """Get webpage contents from an url link
-
-        This includes images urls from discourse cdn
-
-        Args:
-            batch (UrlBatch)
-        """
-        json_content = (res := cls.fetch(batch.json_url)).json()
-        debug(f"{res.url} res.status = {res.status_code}")
-        if res.status_code != 200:
-            raise Exception(res.reason)
-
-        # json_content = json.loads(json_content)
-        return json_content["post_stream"]["posts"][0]["cooked"]
 
     @classmethod
     def fetch(cls, url: str) -> requests.Response:
@@ -228,41 +187,9 @@ class DiscourseProcessor:
 
         return res
 
-    @classmethod
-    def get_markdown_from_raw(cls, batch: UrlBatch) -> Markdown:
-        """Get markdown from page
-
-        This is recommended for extracting text transcriptions
-
-        Args:
-            batch (UrlBatch): _description_
-
-        Returns:
-            str:
-        """
-
-        return requests.get(batch.raw_url).text
-
-    @classmethod
-    def get_images_url_assocs_from_page(cls, page: HTMLPage) -> ImageUrlAssocs:
-        result: list[tuple] = []
-        for match in re.finditer(DiscourseProcessor.Patterns.imgs_urls, page):
-            debug(match.__str__())
-            (sha1, image_cdn_url) = match.group("sha1", "image_cdn_url")
-            result.append((sha1, image_cdn_url))
-        return result
-
-    @classmethod
-    def replace_images_urls_in_markdown(
-        cls, page: Markdown, assocs: ImageUrlAssocs
-    ) -> Markdown:
-        result = page
-        for assoc in assocs:
-            result = result.replace(
-                f"upload://{assoc[0]}",
-                os.path.splitext(assoc[1])[0],
-            )
-        return result
+    @staticmethod
+    def get_markdown_from_url(url: str):
+        return requests.get(url).text
 
     @staticmethod
     def add_metadata_to_markdown(md: Markdown, url_discourse: str) -> Markdown:
@@ -296,12 +223,42 @@ class DiscourseProcessor:
         return "\n".join(md_split)
 
 
+def simple_replace_match(match: re.Match) -> str:
+    hash = match.group(1)
+    if hash:
+        return f"{_BASE_URL}/uploads/short-url/{hash}"
+    return ""
+
+
+def fetch(url: str) -> str | None:
+
+    batch = DiscourseProcessor.transform_to_url_batch(url)
+
+    md_url = batch.raw_url
+
+    result = DiscourseProcessor.get_markdown_from_url(md_url)
+
+    # Replace images urls
+    result = re.sub(
+        DiscourseProcessor.Patterns.hashed_images_urls,
+        simple_replace_match,
+        result,
+    )
+
+    # Remove comments
+    result = DiscourseProcessor.Patterns.post_sep_markdown.split(result, 1)[0].rstrip()
+
+    # Add metadata
+    result = DiscourseProcessor.add_metadata_to_markdown(result, batch.source_url)
+
+    return result
+
+
 def main():
     argparser = ArgumentParser()
     argparser.add_argument(
         "url",
         type=str,
-        nargs=1,  # Change this to `+` if you wish to process multiple urls
         help="discourse urls to be processed",
     )
     argparser.add_argument(
@@ -317,32 +274,9 @@ def main():
     global _is_debug
     _is_debug = os.getenv("DEBUG") == "1" or args.debug
 
-    urls = args.url
+    result = fetch(args.url)
 
-    urls_batches_list: list[UrlBatch] = []
-
-    for url in urls:
-        batch = DiscourseProcessor.transform_to_url_batch(url)
-        if batch is None:
-            continue
-        urls_batches_list.append(batch)
-
-    for batch in urls_batches_list:
-        image_urls_assocs = DiscourseProcessor.get_images_url_assocs_from_page(
-            DiscourseProcessor.get_page_from_json(batch)
-        )
-        result = DiscourseProcessor.replace_images_urls_in_markdown(
-            page=DiscourseProcessor.get_markdown_from_raw(batch),
-            assocs=image_urls_assocs,
-        )
-
-        # Remove comments
-        result = DiscourseProcessor.Patterns.post_sep_markdown.split(result, 1)[0].rstrip()
-
-        # Add metadata
-        result = DiscourseProcessor.add_metadata_to_markdown(result, batch.source_url)
-
-        print(result, file=stdout)
+    print(result, file=stdout)
 
 
 if __name__ == "__main__":
