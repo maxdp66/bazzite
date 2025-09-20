@@ -1,4 +1,4 @@
-# Verwatchtingen
+# Verwachtingen
 
 Dit is een vrijwilligers project en maakt in het algemeen images van bestaande Fedora paketten.
 Als je een probleem of fout hebt gevonden met iets in een van deze repositories moet je
